@@ -20,6 +20,10 @@
 
 ### 예정
 
+#### 4/9 ~
+- [ ] Oracle Cloud Free Tier 서버 생성 → [DEPLOY_ORACLE.md](DEPLOY_ORACLE.md)
+- [ ] VPS에 배포 (yt-dlp + 영상 썸네일/날짜 정상 동작)
+
 #### 4/15 ~ 5/9
 - [ ] TikTok Developer 신청 (Research API)
   - https://developers.tiktok.com/
