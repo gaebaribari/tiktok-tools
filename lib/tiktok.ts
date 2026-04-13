@@ -1,4 +1,8 @@
+import { exec } from "child_process";
+import { promisify } from "util";
 import type { CreatorProfile, VideoInfo, ProgressEvent } from "./types";
+
+const execAsync = promisify(exec);
 
 const USER_AGENTS = [
   "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36",
@@ -28,16 +32,15 @@ export function extractUsernames(inputs: string[]): string[] {
   return [...new Set(usernames)];
 }
 
-async function fetchProfileAndVideos(username: string): Promise<{
-  profile: {
-    username: string;
-    nickname: string;
-    avatar: string;
-    followerCount: number;
-    userId: string;
-  };
-  videos: VideoInfo[];
-} | null> {
+interface YtDlpVideoJson {
+  id: string;
+  title?: string;
+  thumbnail?: string;
+  timestamp?: number;
+  thumbnails?: { id?: string; url: string }[];
+}
+
+async function fetchProfileInfo(username: string) {
   const url = `https://www.tiktok.com/@${username}`;
   const res = await fetch(url, {
     headers: {
@@ -57,42 +60,43 @@ async function fetchProfileAndVideos(username: string): Promise<{
   if (!scriptMatch) return null;
 
   const data = JSON.parse(scriptMatch[1]);
-  const userDetail = data?.["__DEFAULT_SCOPE__"]?.["webapp.user-detail"];
-  const userInfo = userDetail?.userInfo;
+  const userInfo = data?.["__DEFAULT_SCOPE__"]?.["webapp.user-detail"]?.userInfo;
   if (!userInfo) return null;
 
   const user = userInfo.user;
   const stats = userInfo.stats;
 
-  // Extract videos from the same HTML data
-  const videos: VideoInfo[] = [];
-  try {
-    const itemList = userDetail?.itemList;
-    if (Array.isArray(itemList)) {
-      for (const item of itemList.slice(0, 10)) {
-        const cover = item.video?.cover || item.video?.originCover || "";
-        videos.push({
-          id: item.id || "",
-          cover,
-          title: item.desc || "",
-          createTime: item.createTime || 0,
-        });
-      }
-    }
-  } catch {
-    // ignore video parse errors
-  }
-
   return {
-    profile: {
-      username: user.uniqueId as string,
-      nickname: user.nickname as string,
-      avatar: (user.avatarLarger || user.avatarMedium || user.avatarThumb || "") as string,
-      followerCount: (stats.followerCount || 0) as number,
-      userId: (user.id || "") as string,
-    },
-    videos,
+    username: user.uniqueId as string,
+    nickname: user.nickname as string,
+    avatar: (user.avatarLarger || user.avatarMedium || user.avatarThumb || "") as string,
+    followerCount: (stats.followerCount || 0) as number,
+    userId: (user.id || "") as string,
   };
+}
+
+async function fetchVideosWithYtDlp(username: string): Promise<VideoInfo[]> {
+  try {
+    const { stdout } = await execAsync(
+      `yt-dlp --flat-playlist --dump-json "https://www.tiktok.com/@${username}" --playlist-items 1:10 2>/dev/null`,
+      { encoding: "utf-8", timeout: 20000, maxBuffer: 10 * 1024 * 1024 }
+    );
+
+    const lines = stdout.trim().split("\n").filter(Boolean);
+    return lines.map((line) => {
+      const d: YtDlpVideoJson = JSON.parse(line);
+      const originCover = d.thumbnails?.find((t) => t.id === "originCover")?.url;
+      const cover = d.thumbnails?.find((t) => t.id === "cover")?.url;
+      return {
+        id: d.id,
+        cover: originCover || cover || d.thumbnail || "",
+        title: d.title || "",
+        createTime: d.timestamp || 0,
+      };
+    });
+  } catch {
+    return [];
+  }
 }
 
 const MAX_RETRIES = 2;
@@ -104,28 +108,31 @@ export async function fetchSingleProfile(
   onProgress({ type: "status", username, step: "프로필 조회 중..." });
   const t1 = Date.now();
 
-  let result = await fetchProfileAndVideos(username).catch(() => null);
+  let profile = await fetchProfileInfo(username).catch(() => null);
 
-  for (let attempt = 1; !result && attempt <= MAX_RETRIES; attempt++) {
+  for (let attempt = 1; !profile && attempt <= MAX_RETRIES; attempt++) {
     const waitMs = 1000 + Math.random() * 1000;
-    onProgress({ type: "status", username, step: `재시도 ${attempt}/${MAX_RETRIES} (${Math.round(waitMs / 1000)}초 대기)...` });
+    onProgress({ type: "status", username, step: `프로필 재시도 ${attempt}/${MAX_RETRIES} (${Math.round(waitMs / 1000)}초 대기)...` });
     await delay(waitMs);
-    result = await fetchProfileAndVideos(username).catch(() => null);
+    profile = await fetchProfileInfo(username).catch(() => null);
   }
 
-  const elapsed = Date.now() - t1;
+  const profileMs = Date.now() - t1;
 
-  if (!result) {
-    onProgress({ type: "status", username, step: `실패 (${elapsed}ms, ${MAX_RETRIES}회 재시도 후)` });
+  if (!profile) {
+    onProgress({ type: "status", username, step: `프로필 실패 (${profileMs}ms)` });
     return null;
   }
+  onProgress({ type: "status", username, step: `프로필 완료 (${profileMs}ms), 영상 조회 중...` });
 
-  const { profile, videos: recentVideos } = result;
+  const t2 = Date.now();
+  const recentVideos = await fetchVideosWithYtDlp(username);
+  const videoMs = Date.now() - t2;
 
   onProgress({
     type: "status",
     username,
-    step: `완료 — ${elapsed}ms, 영상 ${recentVideos.length}개`,
+    step: `완료 — 프로필 ${profileMs}ms + 영상 ${recentVideos.length}개 ${videoMs}ms`,
   });
 
   const lastPostDate =
