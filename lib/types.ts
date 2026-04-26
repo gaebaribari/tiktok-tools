@@ -10,10 +10,17 @@ export interface CreatorProfile {
   nickname: string;
   avatar: string;
   followerCount: number;
+  followingCount: number;
+  heartCount: number;
+  videoCount: number;
+  verified: boolean;
+  privateAccount: boolean;
   url: string;
   uniqueUrl: string;
   recentVideos: VideoInfo[];
   lastPostDate: string | null;
+  bio: string;
+  email: string | null;
 }
 
 export interface ProgressEvent {

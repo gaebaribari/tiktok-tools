@@ -71,15 +71,39 @@ export default function CreatorCard({ profile, selected, onToggle }: CreatorCard
             @{profile.username}
           </a>
           <span className="text-foreground font-medium">{profile.nickname}</span>
+          {profile.verified && (
+            <span className="text-xs bg-accent text-white px-1.5 py-0.5 rounded-full" title="인증 계정">✓</span>
+          )}
           <span className="text-sm text-muted">
             {formatFollowers(profile.followerCount)} 팔로워
+          </span>
+          <span className="text-sm text-muted">
+            좋아요 {formatFollowers(profile.heartCount)}
+          </span>
+          <span className="text-sm text-muted">
+            영상 {profile.videoCount}개
           </span>
           <span className="text-sm text-muted">
             최근 {daysAgo(profile.lastPostDate)}
           </span>
         </div>
+        {profile.bio && (
+          <p className="text-xs text-muted mb-2 line-clamp-2">{profile.bio}</p>
+        )}
+        {profile.email && (
+          <p className="text-xs mb-2">
+            <span className="text-muted">이메일: </span>
+            <a href={`mailto:${profile.email}`} className="text-blue-500 hover:underline break-all">
+              {profile.email}
+            </a>
+          </p>
+        )}
 
-        {profile.recentVideos.length > 0 ? (
+        {profile.privateAccount ? (
+          <p className="text-sm text-muted">🔒 비공개 계정</p>
+        ) : profile.videoCount === 0 ? (
+          <p className="text-sm text-muted">컨텐츠 없음</p>
+        ) : profile.recentVideos.length > 0 ? (
           <div className="flex gap-2 overflow-x-auto pb-1">
             {profile.recentVideos.map((video) => (
               <div key={video.id} className="flex-shrink-0">

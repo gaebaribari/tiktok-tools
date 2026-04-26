@@ -1,20 +1,14 @@
 import { exec } from "child_process";
 import { promisify } from "util";
+import path from "path";
 import type { CreatorProfile, VideoInfo, ProgressEvent } from "./types";
 
 const execAsync = promisify(exec);
 
-const USER_AGENTS = [
-  "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36",
-  "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36",
-  "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/18.2 Safari/605.1.15",
-  "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:134.0) Gecko/20100101 Firefox/134.0",
-  "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36",
-];
-
-function randomUA() {
-  return USER_AGENTS[Math.floor(Math.random() * USER_AGENTS.length)];
-}
+const PYTHON_BIN =
+  process.env.TIKTOK_PYTHON ||
+  "/opt/homebrew/opt/yt-dlp/libexec/bin/python3";
+const FETCH_SCRIPT = path.join(process.cwd(), "scripts", "fetch_tiktok_html.py");
 
 function delay(ms: number) {
   return new Promise((resolve) => setTimeout(resolve, ms));
@@ -40,19 +34,17 @@ interface YtDlpVideoJson {
   thumbnails?: { id?: string; url: string }[];
 }
 
-async function fetchProfileInfo(username: string) {
+async function fetchProfileHtml(username: string): Promise<string> {
   const url = `https://www.tiktok.com/@${username}`;
-  const res = await fetch(url, {
-    headers: {
-      "User-Agent": randomUA(),
-      Accept: "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
-      "Accept-Language": "en-US,en;q=0.9",
-    },
-    signal: AbortSignal.timeout(15000),
-  });
+  const { stdout } = await execAsync(
+    `"${PYTHON_BIN}" "${FETCH_SCRIPT}" "${url}"`,
+    { encoding: "utf-8", timeout: 20000, maxBuffer: 20 * 1024 * 1024 }
+  );
+  return stdout;
+}
 
-  if (!res.ok) return null;
-  const html = await res.text();
+async function fetchProfileInfo(username: string) {
+  const html = await fetchProfileHtml(username);
 
   const scriptMatch = html.match(
     new RegExp('<script id="__UNIVERSAL_DATA_FOR_REHYDRATION__"[^>]*>([\\s\\S]*?)</script>')
@@ -66,37 +58,65 @@ async function fetchProfileInfo(username: string) {
   const user = userInfo.user;
   const stats = userInfo.stats;
 
+  const bio = (user.signature || "") as string;
+  const emailMatch = bio.match(/[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}/);
+
   return {
     username: user.uniqueId as string,
     nickname: user.nickname as string,
     avatar: (user.avatarLarger || user.avatarMedium || user.avatarThumb || "") as string,
     followerCount: (stats.followerCount || 0) as number,
+    followingCount: (stats.followingCount || 0) as number,
+    heartCount: (stats.heartCount || stats.heart || 0) as number,
+    videoCount: (stats.videoCount || 0) as number,
+    verified: Boolean(user.verified),
+    privateAccount: Boolean(user.privateAccount ?? user.secret),
     userId: (user.id || "") as string,
+    bio,
+    email: emailMatch ? emailMatch[0] : null,
   };
 }
 
-async function fetchVideosWithYtDlp(username: string): Promise<VideoInfo[]> {
-  try {
-    const { stdout } = await execAsync(
-      `yt-dlp --flat-playlist --dump-json "https://www.tiktok.com/@${username}" --playlist-items 1:10 2>/dev/null`,
-      { encoding: "utf-8", timeout: 20000, maxBuffer: 10 * 1024 * 1024 }
-    );
+async function runYtDlp(username: string): Promise<string> {
+  const { stdout } = await execAsync(
+    `yt-dlp --flat-playlist --dump-json --impersonate chrome "https://www.tiktok.com/@${username}" --playlist-items 1:10 2>/dev/null`,
+    { encoding: "utf-8", timeout: 30000, maxBuffer: 10 * 1024 * 1024 }
+  );
+  return stdout;
+}
 
-    const lines = stdout.trim().split("\n").filter(Boolean);
-    return lines.map((line) => {
-      const d: YtDlpVideoJson = JSON.parse(line);
-      const originCover = d.thumbnails?.find((t) => t.id === "originCover")?.url;
-      const cover = d.thumbnails?.find((t) => t.id === "cover")?.url;
-      return {
-        id: d.id,
-        cover: originCover || cover || d.thumbnail || "",
-        title: d.title || "",
-        createTime: d.timestamp || 0,
-      };
-    });
-  } catch {
-    return [];
+async function fetchVideosWithYtDlp(username: string): Promise<VideoInfo[]> {
+  let stdout = "";
+  for (let attempt = 0; attempt < 2; attempt++) {
+    try {
+      stdout = await runYtDlp(username);
+      if (stdout.trim()) break;
+    } catch {
+      // retry
+    }
+    if (attempt === 0) await delay(1000 + Math.random() * 1000);
   }
+
+  if (!stdout.trim()) return [];
+
+  const lines = stdout.trim().split("\n").filter(Boolean);
+  return lines
+    .map((line) => {
+      try {
+        const d: YtDlpVideoJson = JSON.parse(line);
+        const originCover = d.thumbnails?.find((t) => t.id === "originCover")?.url;
+        const cover = d.thumbnails?.find((t) => t.id === "cover")?.url;
+        return {
+          id: d.id,
+          cover: cover || originCover || d.thumbnail || "",
+          title: d.title || "",
+          createTime: d.timestamp || 0,
+        };
+      } catch {
+        return null;
+      }
+    })
+    .filter((v): v is VideoInfo => v !== null);
 }
 
 const MAX_RETRIES = 2;

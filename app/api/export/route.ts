@@ -4,13 +4,16 @@ import type { CreatorProfile } from "@/lib/types";
 
 export async function POST(req: NextRequest) {
   try {
-    const { profiles } = (await req.json()) as { profiles: CreatorProfile[] };
+    const { profiles, includeEmail } = (await req.json()) as {
+      profiles: CreatorProfile[];
+      includeEmail?: boolean;
+    };
 
     if (!profiles || !Array.isArray(profiles) || profiles.length === 0) {
       return NextResponse.json({ error: "내보낼 크리에이터가 없습니다" }, { status: 400 });
     }
 
-    const csv = generateCSV(profiles);
+    const csv = generateCSV(profiles, includeEmail);
 
     return new NextResponse(csv, {
       headers: {

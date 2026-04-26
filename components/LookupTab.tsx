@@ -125,10 +125,16 @@ export default function LookupTab() {
     }
   }, [visibleProfiles]);
 
-  const handleCopySelected = useCallback(() => {
+  const handleExport = useCallback(() => {
     const selected = visibleProfiles.filter((p) => selectedUsernames.has(p.username));
-    const urls = selected.map((p) => p.url).join("\n");
-    navigator.clipboard.writeText(urls);
+    if (selected.length === 0) return;
+
+    const header = "닉네임\t틱톡아이디\t틱톡주소\t이메일";
+    const rows = selected.map((p) =>
+      [p.nickname, p.username, p.url, p.email || ""].join("\t")
+    );
+    const text = [header, ...rows].join("\n");
+    navigator.clipboard.writeText(text);
     setCopied(true);
     setTimeout(() => setCopied(false), 2000);
   }, [visibleProfiles, selectedUsernames]);
@@ -234,7 +240,7 @@ export default function LookupTab() {
 
           {!loading && (
             <button
-              onClick={handleCopySelected}
+              onClick={handleExport}
               disabled={selectedCount === 0}
               className={`px-6 py-2.5 rounded-lg text-sm font-semibold transition-all ${
                 copied
@@ -242,7 +248,7 @@ export default function LookupTab() {
                   : "bg-accent text-white hover:bg-accent-hover disabled:bg-accent-light disabled:cursor-not-allowed"
               }`}
             >
-              {copied ? "복사 완료!" : `선택한 ${selectedCount}명 전체 복사`}
+              {copied ? "복사 완료!" : `내보내기 (복사) - ${selectedCount}명`}
             </button>
           )}
         </div>
