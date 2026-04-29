@@ -37,11 +37,19 @@ TikTok 크리에이터 채널 정보를 일괄 조회하고, 영상 다운로드
 - [x] 비공개 계정 / 컨텐츠 없음 상태 분기 표시
   - `CreatorProfile.privateAccount` 필드 추가 (`user.privateAccount` 또는 `user.secret`)
   - 카드 영상 영역: 비공개 → "🔒 비공개 계정", `videoCount === 0` → "컨텐츠 없음"
+- [x] yt-dlp 쿠키 옵션 환경변수 지원
+  - `TIKTOK_COOKIES_FILE` (Netscape cookies.txt 경로) 또는 `TIKTOK_COOKIES_BROWSER` (chrome/firefox/safari/edge/brave)
+  - 로그인 세션 사용 시 차단율 감소
+- [x] Python HTML fetcher 데몬화 (프로세스 풀)
+  - 기존: 크리에이터 1명마다 Python 인터프리터 새로 spawn (시동 ~300ms × N)
+  - 변경: `scripts/fetch_tiktok_html.py --daemon` 모드 추가, NDJSON 프로토콜로 stdin 요청 → stdout 응답
+  - Node 측 `lib/htmlDaemon.ts`에서 풀(기본 3개) 관리, `globalThis` 캐싱으로 hot-reload 안전
+  - 풀 크기: `TIKTOK_DAEMON_POOL` 환경변수로 조정 가능
 
 ---
 
 ## 진행중
-- [ ] 배포 서버에 최신 코드 반영 (bio, 이메일, impersonate)
+- [ ] 배포 서버에 최신 코드 반영 (썸네일 우선순위, 이메일 표시, 비공개/컨텐츠 없음 분기, 쿠키 옵션, HTML fetcher 데몬 풀)
 
 ---
 
@@ -96,10 +104,27 @@ TikTok 크리에이터 채널 정보를 일괄 조회하고, 영상 다운로드
 - **결론**: 현재 규모에서는 무료 크롤링 + 차단 완화 패치로 충분. 월 요청 10만 건 이상으로 커지면 재평가.
 - **배움**: build vs buy 의사결정 — 기술적으로 가능한 것과 경제적으로 합리적인 것의 구분
 
+### 6. Python HTML fetcher 데몬 풀 전환
+- **문제**: 크리에이터 한 명마다 `execAsync`로 Python 인터프리터를 새로 spawn → 시동 비용 ~300ms × N. 10명 조회 시 누적 3초 + 동시 처리 시 인터프리터 N개 동시 시작으로 메모리 스파이크.
+- **선택지**: (1) 단일 데몬 + 직렬 처리 — 시동 비용은 사라지지만 동시성 손실, (2) 데몬 풀(N개) — 동시성 유지하면서 시동 비용 제거.
+- **결정**: 풀 사이즈 3 (기존 `Promise.all` 동시성과 동일). NDJSON over stdin/stdout 프로토콜로 단순화. `globalThis` 캐싱으로 Next.js dev hot-reload에도 풀이 살아남음.
+- **배움**: "외부 프로세스 호출 = 호출 빈도 × 시동 비용" 관점에서 코드를 보면 자연스럽게 풀/데몬 패턴이 떠오름. 아키텍처 결정은 단발 비용이 아니라 누적 비용으로 판단.
+
+### 7. 로그인 쿠키로 차단 완화
+- **문제**: yt-dlp `--impersonate chrome`만으로는 TikTok의 게스트 요청 제약을 못 우회. 일부 프로필은 빈 영상 목록을 받음.
+- **결정**: 환경변수로 쿠키 주입 옵션 추가 — `TIKTOK_COOKIES_FILE`(Netscape 포맷) 또는 `TIKTOK_COOKIES_BROWSER`(브라우저에서 직접 읽기). 코드 변경 없이 운영 환경에서 켜고 끌 수 있음.
+- **배움**: 봇 탐지 회피의 다층 구조 — TLS 핑거프린팅(impersonate) → 세션/쿠키(로그인 상태) → IP 평판(프록시). 단계별로 비용/효과가 다르므로 가장 가성비 높은 단계부터 적용.
+
 ---
 
 ## 메모
 - 현재 배포 서버: `http://168.107.54.238:3200` (Oracle Cloud ap-chuncheon-1)
 - 개발 포트: 3200
-- 크롤링 전략: HTML fetch (프로필) + yt-dlp --impersonate chrome (영상)
+- 크롤링 전략: Python HTML 데몬 풀 (프로필) + yt-dlp --impersonate chrome (영상)
+- 환경변수
+  - `TIKTOK_PYTHON` — curl-cffi 설치된 Python 경로 (기본: `/opt/homebrew/opt/yt-dlp/libexec/bin/python3`)
+  - `TIKTOK_DAEMON_POOL` — HTML fetcher 풀 크기 (기본 3)
+  - `TIKTOK_DAEMON_DEBUG` — 데몬 stderr 출력 활성화
+  - `TIKTOK_COOKIES_FILE` — yt-dlp용 Netscape cookies.txt 경로
+  - `TIKTOK_COOKIES_BROWSER` — yt-dlp용 브라우저 직접 읽기 (chrome/firefox/safari/edge/brave)
 - GitHub: https://github.com/gaebaribari/tiktok-tools

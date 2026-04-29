@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 import sys
+import json
 import time
 from curl_cffi import requests
 
@@ -36,9 +37,31 @@ def fetch(url: str):
     return None
 
 
+def daemon():
+    for line in sys.stdin:
+        line = line.strip()
+        if not line:
+            continue
+        try:
+            req = json.loads(line)
+            url = req.get("url", "")
+            if not url:
+                resp = {"ok": False, "error": "missing url"}
+            else:
+                html = fetch(url)
+                resp = {"ok": True, "html": html} if html else {"ok": False, "error": "fetch failed"}
+        except Exception as e:
+            resp = {"ok": False, "error": str(e)}
+        sys.stdout.write(json.dumps(resp) + "\n")
+        sys.stdout.flush()
+
+
 def main():
+    if len(sys.argv) >= 2 and sys.argv[1] == "--daemon":
+        daemon()
+        return
     if len(sys.argv) < 2:
-        sys.stderr.write("usage: fetch_tiktok_html.py <url>\n")
+        sys.stderr.write("usage: fetch_tiktok_html.py <url> | --daemon\n")
         sys.exit(2)
     html = fetch(sys.argv[1])
     if html is None:

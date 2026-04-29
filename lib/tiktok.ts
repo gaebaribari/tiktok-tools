@@ -1,14 +1,17 @@
 import { exec } from "child_process";
 import { promisify } from "util";
-import path from "path";
+import { fetchHtml } from "./htmlDaemon";
 import type { CreatorProfile, VideoInfo, ProgressEvent } from "./types";
 
 const execAsync = promisify(exec);
 
-const PYTHON_BIN =
-  process.env.TIKTOK_PYTHON ||
-  "/opt/homebrew/opt/yt-dlp/libexec/bin/python3";
-const FETCH_SCRIPT = path.join(process.cwd(), "scripts", "fetch_tiktok_html.py");
+function cookiesArgs(): string {
+  const file = process.env.TIKTOK_COOKIES_FILE;
+  if (file) return `--cookies "${file}"`;
+  const browser = process.env.TIKTOK_COOKIES_BROWSER;
+  if (browser) return `--cookies-from-browser ${browser}`;
+  return "";
+}
 
 function delay(ms: number) {
   return new Promise((resolve) => setTimeout(resolve, ms));
@@ -34,17 +37,8 @@ interface YtDlpVideoJson {
   thumbnails?: { id?: string; url: string }[];
 }
 
-async function fetchProfileHtml(username: string): Promise<string> {
-  const url = `https://www.tiktok.com/@${username}`;
-  const { stdout } = await execAsync(
-    `"${PYTHON_BIN}" "${FETCH_SCRIPT}" "${url}"`,
-    { encoding: "utf-8", timeout: 20000, maxBuffer: 20 * 1024 * 1024 }
-  );
-  return stdout;
-}
-
 async function fetchProfileInfo(username: string) {
-  const html = await fetchProfileHtml(username);
+  const html = await fetchHtml(`https://www.tiktok.com/@${username}`);
 
   const scriptMatch = html.match(
     new RegExp('<script id="__UNIVERSAL_DATA_FOR_REHYDRATION__"[^>]*>([\\s\\S]*?)</script>')
@@ -78,10 +72,14 @@ async function fetchProfileInfo(username: string) {
 }
 
 async function runYtDlp(username: string): Promise<string> {
-  const { stdout } = await execAsync(
-    `yt-dlp --flat-playlist --dump-json --impersonate chrome "https://www.tiktok.com/@${username}" --playlist-items 1:10 2>/dev/null`,
+  const cookies = cookiesArgs();
+  const { stdout, stderr } = await execAsync(
+    `yt-dlp --flat-playlist --dump-json --impersonate chrome ${cookies} "https://www.tiktok.com/@${username}" --playlist-items 1:10`,
     { encoding: "utf-8", timeout: 30000, maxBuffer: 10 * 1024 * 1024 }
   );
+  if (stderr && !stdout.trim()) {
+    console.error(`[yt-dlp ${username}] stderr:`, stderr.slice(0, 500));
+  }
   return stdout;
 }
 
@@ -91,8 +89,9 @@ async function fetchVideosWithYtDlp(username: string): Promise<VideoInfo[]> {
     try {
       stdout = await runYtDlp(username);
       if (stdout.trim()) break;
-    } catch {
-      // retry
+    } catch (e) {
+      const err = e as { message?: string; stderr?: string };
+      console.error(`[yt-dlp ${username}] attempt ${attempt + 1} failed:`, err.message?.slice(0, 300), err.stderr?.slice(0, 300));
     }
     if (attempt === 0) await delay(1000 + Math.random() * 1000);
   }
